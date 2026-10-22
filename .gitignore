@@ -1,0 +1,12 @@
+.build/
+.agentmux/
+.vscode/
+dist/
+__pycache__/
+*.pyc
+.DS_Store
+*.ipa
+*.app
+*.mobileprovision
+*.p12
+*.cer
