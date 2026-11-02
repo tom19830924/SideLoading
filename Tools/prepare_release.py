@@ -35,6 +35,10 @@ class ResignIpa < Formula
   depends_on arch: :arm64
   depends_on macos: :sonoma
 
+  # The bundled runtime is already relocatable and signed by the release build.
+  preserve_rpath
+  skip_clean "libexec/Runtime"
+
   def install
     libexec.install "resign_ipa", "Runtime", "Resources", "README.md", "LICENSE", "requirements-runtime.lock"
     bin.install_symlink libexec/"resign_ipa"
@@ -42,6 +46,7 @@ class ResignIpa < Formula
 
   test do
     assert_match "--ipa", shell_output("#{{bin}}/resign_ipa --help")
+    assert_match '"type": "result"', shell_output("#{{bin}}/resign_ipa --json environment")
   end
 end
 '''

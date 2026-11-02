@@ -2,6 +2,8 @@
 import hashlib
 from pathlib import Path
 import plistlib
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -10,6 +12,23 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "Tools"))
 import prepare_release
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@unittest.skipUnless(sys.platform == "darwin", "Uses macOS Mach-O signing tools")
+class RuntimePackagingTests(unittest.TestCase):
+    def test_bundled_dylib_keeps_a_portable_signed_install_name(self):
+        # This pinned-runtime library has a short ID and insufficient space for
+        # Homebrew's longer absolute prefix: use the real failing binary.
+        original = ROOT / ".build/Runtime/lib/itcl4.3.5/libitcl4.3.5.dylib"
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / original.name
+            shutil.copy2(original, library)
+            subprocess.run([sys.executable, "-I", "-B", str(ROOT / "Tools/sign_runtime.py"), directory], check=True)
+            identifier = subprocess.check_output(["/usr/bin/otool", "-D", str(library)], text=True).splitlines()[1].strip()
+            self.assertEqual(identifier, "@rpath/" + library.name)
+            subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(library)], check=True)
 
 
 class ReleaseTests(unittest.TestCase):
