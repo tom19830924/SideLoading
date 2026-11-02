@@ -12,7 +12,7 @@ struct InstallerView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("把 App 帶到你的 iPhone").font(.title2).bold()
-                        Text("本機簽署 · Apple 官方工具 · 帳密留在 Xcode")
+                        Text("提供 IPA、P12 與描述檔 · 本機重簽 · USB 安裝")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -23,6 +23,7 @@ struct InstallerView: View {
                     VStack(spacing: 16) {
                         IPASelectionView(model: model)
                         DeviceSelectionView(model: model)
+                        CertificateSelectionView(model: model)
                         SigningView(model: model)
                         if let error = model.errorMessage {
                             ErrorPanel(message: error)

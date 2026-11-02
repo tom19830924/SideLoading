@@ -23,9 +23,9 @@ struct SidebarView: View {
             }.font(.callout).foregroundStyle(.secondary)
             Spacer()
             VStack(alignment: .leading, spacing: 8) {
-                Label("免費帳號須定期續簽", systemImage: "calendar.badge.clock")
+                Label("有效期依描述檔決定", systemImage: "calendar.badge.clock")
                     .font(.callout).bold()
-                Text("一般有效期為 7 天。到期前連接 Mac，選擇同一個 IPA 與帳號重新安裝。")
+                Text("到期前準備有效憑證與描述檔，再以相同 App ID 重簽安裝。原始 IPA 會保留。")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Button("第一次使用", systemImage: "book") { model.showSetup = true }

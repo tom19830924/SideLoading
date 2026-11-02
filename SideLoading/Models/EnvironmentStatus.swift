@@ -1,8 +1,7 @@
 import Foundation
 
 struct EnvironmentStatus: Decodable, Sendable {
-    let xcodeReady: Bool
+    let runtimeReady: Bool
     let devices: [Device]
-    let identities: [SigningIdentity]
     let warnings: [String]
 }

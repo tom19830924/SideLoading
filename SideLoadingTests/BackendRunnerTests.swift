@@ -3,7 +3,19 @@ import Testing
 @testable import SideLoading
 
 @MainActor
+@Suite(.serialized)
 struct BackendRunnerTests {
+    @Test func bundledEnvironmentIsIndependentOfXcode() async throws {
+        let previous = ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
+        setenv("DEVELOPER_DIR", "/nonexistent", 1)
+        defer {
+            if let previous { setenv("DEVELOPER_DIR", previous, 1) }
+            else { unsetenv("DEVELOPER_DIR") }
+        }
+        let status = try await BackendRunner().run(EnvironmentStatus.self, arguments: ["environment"])
+        #expect(status.runtimeReady)
+    }
+
     @Test func reportsStructuredErrorsAndCanRunAgain() async throws {
         let runner = BackendRunner()
         for _ in 0..<2 {

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Python and Swift tests
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.3"
+      - name: Check build environment
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun swift --version
+      - name: Prepare bundled Python
+        run: ./setup_runtime.sh
+      - name: Run Python and native signing tests
+        env:
+          SIDELOADING_RUN_NATIVE_TESTS: "1"
+        run: .build/Runtime/bin/python3 -I -B -m unittest discover -s SideLoadingTests/Python -v
+      - name: Run Swift tests
+        run: |
+          xcodebuild test \
+            -project SideLoading.xcodeproj \
+            -scheme SideLoading \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/CI \
+            -resultBundlePath .build/SwiftTests.xcresult \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY=-
+      - name: Preserve failed Swift test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swift-test-results
+          path: .build/SwiftTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7

@@ -6,6 +6,7 @@ struct InstallReceipt: Codable, Identifiable, Sendable {
     let bundleID: String
     let deviceName: String
     let expires: String
+    let output: String
 
     var expirationDate: Date? { ISO8601DateFormatter().date(from: expires) }
 }

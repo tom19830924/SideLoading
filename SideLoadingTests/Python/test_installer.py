@@ -132,82 +132,9 @@ class InstallerTests(unittest.TestCase):
     def test_versions_ignore_trailing_zero(self):
         self.assertEqual(installer.version_tuple("26.6"), installer.version_tuple("26.6.0"))
 
-    def test_devices_exclude_simulators_and_handle_new_schema(self):
-        physical = {"identifier": "ID", "properties": {
-            "hardware": {"deviceType": "iPhone", "reality": "physical", "udid": "PHONE"},
-            "state": {"name": "Mine", "developerModeStatus": {"enabled": {}}},
-            "software": {"osVersionNumber": {"stringValue": "26.6.1"}},
-            "connection": {"state": "connected", "pairingState": "paired"}}}
-        simulator = {"identifier": "SIM", "hardwareProperties": {"deviceType": "iPhone", "reality": "simulated"}}
-        devices = installer.parse_devices({"result": {"devices": [physical, simulator]}})
-        self.assertEqual(len(devices), 1)
-        self.assertTrue(devices[0]["connected"])
-        self.assertEqual(devices[0]["osVersion"], "26.6.1")
 
-    def test_stable_personal_id_on_reinstall(self):
-        app = installer.extract_ipa(self.ipa(), self.folder)
-        with patch.object(installer, "entitlements", return_value={}):
-            first = installer.signing_plan(app, "ABCDEFGHIJ")
-            second = installer.signing_plan(app, "ABCDEFGHIJ")
-            other = installer.signing_plan(app, "ZYXWVUTSRQ")
-        self.assertEqual(first[0][2], second[0][2])
-        self.assertNotEqual(first[0][2], other[0][2])
 
-    def test_automatic_provisioning_keeps_certificate_for_local_signing(self):
-        app = installer.extract_ipa(self.ipa(), self.folder)
-        certificate = hashlib.sha1(b"test cert").hexdigest().upper()
-        signing_calls = []
 
-        def xcode_and_codesign(arguments, **_):
-            if arguments[:2] == ["/usr/bin/xcrun", "xcodebuild"]:
-                project = Path(arguments[arguments.index("-project") + 1])
-                settings = installer.read_plist(project / "project.pbxproj")["objects"]["11"]["buildSettings"]
-                identity = settings["CODE_SIGN_IDENTITY"]
-                for argument in arguments:
-                    if isinstance(argument, str) and argument.startswith("CODE_SIGN_IDENTITY="):
-                        identity = argument.split("=", 1)[1]
-                # Replay Xcode's contract from the reported diagnostic.
-                if settings["CODE_SIGN_STYLE"] == "Automatic" and identity != "Apple Development":
-                    raise installer.InstallError("Signing has conflicting provisioning settings. "
-                                                 "Signing is automatically signed, but code signing identity "
-                                                 f"{identity} has been manually specified.")
-                generated = Path(arguments[arguments.index("-derivedDataPath") + 1]) / "Build/Products/Debug-iphoneos/Signing.app"
-                generated.mkdir(parents=True)
-                installer.write_plist(generated / "embedded.mobileprovision", self.profile())
-            elif arguments[0] == "/usr/bin/codesign" and "--sign" in arguments:
-                signing_calls.append(arguments)
-            return b"", b"", 0
-
-        def fixture_entitlements(bundle):
-            if bundle == app:
-                return {}
-            return {"application-identifier": "ABCDEFGHIJ.example.test", "get-task-allow": True}
-
-        with patch.object(installer, "run", side_effect=xcode_and_codesign), \
-             patch.object(installer, "entitlements", side_effect=fixture_entitlements), \
-             patch.object(installer, "profile_data", side_effect=installer.read_plist), \
-             patch.object(installer, "progress"):
-            _, bundle_id = installer.resign(app, self.folder, "DEVICE", "ABCDEFGHIJ", certificate, True)
-        self.assertEqual(bundle_id, "example.test")
-        self.assertEqual(len(signing_calls), 1)
-        self.assertEqual(signing_calls[0][signing_calls[0].index("--sign") + 1], certificate)
-        self.assertTrue((app / "embedded.mobileprovision").is_file())
-
-    def test_failed_install_never_reports_success(self):
-        source = self.ipa()
-        args = argparse.Namespace(ipa=source, device="00008150-001804DE3C40401C", mode="automatic", team="ABCDEFGHIJ", identity="A" * 40, keep_identifier=False)
-        device = dict(id=args.device, name="Test", available=True, developerMode="enabled", osVersion="26.6.1")
-
-        def fake_run(arguments, **_):
-            Path(arguments[arguments.index("--json-output") + 1]).write_text(json.dumps({"info": {"outcome": "failure"}}))
-            return b"", b"", 0
-
-        with patch.object(installer, "list_devices", return_value=[device]), \
-             patch.object(installer, "resign", return_value=(datetime.datetime.now(), "example.test")), \
-             patch.object(installer, "run", side_effect=fake_run), \
-             patch.object(installer, "progress"):
-            with self.assertRaisesRegex(installer.InstallError, "未回報安裝成功"):
-                installer.install(args)
 
 
 if __name__ == "__main__":

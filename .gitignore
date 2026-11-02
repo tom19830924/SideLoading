@@ -9,4 +9,7 @@ __pycache__/
 *.app
 *.mobileprovision
 *.p12
+*.pfx
+*.key
+*.pem
 *.cer

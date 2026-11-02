@@ -6,6 +6,11 @@ if [[ ! -d SideLoading.xcodeproj || ! -d SideLoading ]]; then
     exit 1
 fi
 
+if [[ ! -x .build/Runtime/bin/python3 ]]; then
+    print -u2 "請先執行 ./setup_runtime.sh 準備內附執行環境。"
+    exit 1
+fi
+
 build_root="$(/usr/bin/mktemp -d /private/tmp/sideloading-build.XXXXXX)"
 build_log="$(/usr/bin/mktemp /private/tmp/sideloading-build-log.XXXXXX)"
 staging_app=".SideLoading.app.staging"
@@ -34,7 +39,9 @@ built_app="$build_root/Build/Products/Release/SideLoading.app"
 built_binary="$built_app/Contents/MacOS/SideLoading"
 
 [[ -d "$built_app" ]] || { print -u2 "找不到建置完成的 SideLoading.app"; exit 1; }
-[[ -f "$built_app/Contents/Resources/installer.py" ]] || { print -u2 "建置產物缺少 installer.py"; exit 1; }
+for resource in installer.py resign_cli.py ipa_resigner.py signing_keychain.py device_backend.py Runtime/bin/python3 LICENSE; do
+    [[ -f "$built_app/Contents/Resources/$resource" ]] || { print -u2 "建置產物缺少 $resource"; exit 1; }
+done
 /usr/bin/codesign --verify --deep --strict "$built_app"
 
 architectures="$(/usr/bin/lipo -archs "$built_binary")"
@@ -49,4 +56,15 @@ fi
 /bin/rm -rf "$output_app"
 /bin/mv "$staging_app" "$output_app"
 
-print "完成：$output_app（Apple Silicon / Release）"
+# A separate relocatable command-line distribution; no Xcode or uv at runtime.
+mkdir -p dist/SideLoadingCLI/Resources
+/usr/bin/ditto "$output_app/Contents/Resources/Runtime" dist/SideLoadingCLI/Runtime
+for resource in installer.py resign_cli.py ipa_resigner.py signing_keychain.py device_backend.py; do
+    /bin/cp "$output_app/Contents/Resources/$resource" "dist/SideLoadingCLI/Resources/$resource"
+done
+/bin/cp resign_ipa dist/SideLoadingCLI/resign_ipa
+/bin/cp requirements-runtime.lock dist/SideLoadingCLI/requirements-runtime.lock
+/bin/cp README.md dist/SideLoadingCLI/README.md
+/bin/cp LICENSE dist/SideLoadingCLI/LICENSE
+
+print "完成：$output_app 與 dist/SideLoadingCLI（Apple Silicon / Release）"

@@ -4,33 +4,28 @@ struct SigningView: View {
     @Bindable var model: InstallerModel
 
     var body: some View {
-        SectionCard(number: "3", title: "使用你的本機憑證", subtitle: "Apple 帳號只在官方 Xcode 登入，此工具不接收密碼。") {
-            if model.environment?.identities.isEmpty != false {
-                Label("尚未找到 Apple Development 憑證", systemImage: "key")
-                    .foregroundStyle(.secondary)
-            } else {
-                Picker("簽署憑證", selection: $model.selectedIdentityID) {
-                    Text("請選擇憑證").tag("")
-                    ForEach(model.environment?.identities ?? []) { identity in
-                        Text(identity.name).tag(identity.id)
-                    }
-                }.disabled(model.isBusy || model.useExistingSignature)
-                if let identity = model.identity {
-                    Text("Team ID：\(identity.teamID)").font(.callout.monospaced()).foregroundStyle(.secondary)
-                }
+        SectionCard(number: "4", title: "選擇描述檔", subtitle: "使用你提供的 mobileprovision；會檢查憑證、手機與必要權限。") {
+            HStack {
+                Label(model.profileURL?.lastPathComponent ?? "尚未選擇主 App 描述檔", systemImage: "doc.badge.gearshape")
+                    .lineLimit(1).truncationMode(.middle)
+                    .help(model.profileURL?.path ?? "選擇主 App 的描述檔")
+                Spacer()
+                Button("選擇描述檔", systemImage: "folder", action: model.chooseProfile)
+                    .accessibilityIdentifier("chooseMainProfile")
             }
-            if !model.capabilityOptions.isEmpty && !model.useExistingSignature {
-                CapabilityOptionsView(model: model)
-            }
+            ExtensionProfilesView(model: model)
+            if !model.capabilityOptions.isEmpty { CapabilityOptionsView(model: model) }
             DisclosureGroup("進階選項") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("IPA 已為這支手機簽署，直接驗證並安裝", isOn: $model.useExistingSignature)
-                    Toggle("保留原始 Bundle ID", isOn: $model.keepIdentifier)
-                        .disabled(model.useExistingSignature)
-                    Text("預設會產生屬於你的固定 App ID，避免與作者衝突。重新安裝時請使用相同憑證團隊與選項；改用不同 App ID 會變成另一個 App。")
-                        .font(.callout).foregroundStyle(.secondary)
-                }.padding(.top, 10).disabled(model.isBusy)
+                    TextField("Bundle ID（留空依描述檔決定）", text: $model.bundleIdentifier)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("App Group 對照，每行一筆 group.old=group.new", text: $model.appGroupMappings, axis: .vertical)
+                        .lineLimit(2...5).textFieldStyle(.roundedBorder)
+                    Text("主 App 預設使用描述檔的 ID；萬用描述檔則保留原始 ID。更換 ID 會被手機視為另一個 App。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(.top, 10)
             }
         }
+        .disabled(model.isBusy)
     }
 }

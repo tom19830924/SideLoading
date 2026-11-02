@@ -1,124 +1,161 @@
 # SideLoading
 
-自己建置的 macOS IPA 安裝工具。目標是將開發者提供的 IPA（例如 JHenTai）安裝到自己的 iPhone。
+macOS 上的 IPA 重簽與 USB 安裝工具，提供 **SideLoading.app** 圖形介面與 **resign_ipa** 命令列工具。
 
-**沒有 Apple 帳密輸入欄位，沒有第三方簽署服務，也不使用 AltStore、SideStore、iloader 或 Sideloadly。**
+你提供原始 IPA、P12／PFX 憑證與描述檔，工具在 Mac 本機完成重簽，保留原始檔並產生新的 IPA。App 可接著將重簽的 IPA 安裝到 iPhone／iPad；命令列工具預設只重簽並輸出檔案。
 
-## 使用方式
+已打包的 App 與 CLI 內附 Python 及所需套件，執行時不需要安裝 Xcode 或登入 Apple 帳號。本工具不會申請憑證、App ID 或描述檔。
 
-1. 在專案根目錄執行 `./build_app.sh`，產生 `SideLoading.app`；之後直接開啟這個 App。
-2. 按「第一次使用」，按照指引在 **Apple 官方 Xcode** 登入 Apple 帳號並建立 Apple Development 憑證。
-3. 用 USB 連接自己的 iPhone、解鎖並信任 Mac，開啟 iPhone 的開發者模式。
-4. 在 SideLoading 選擇 IPA、自己的 iPhone、自己的簽署憑證。
-5. 按「簽署並安裝」。只有 Apple 的 `devicectl` 回報成功才會顯示安裝完成。
-6. 在手機開啟 App；必要時到「設定 → 一般 → VPN 與裝置管理」信任自己的開發者帳號。
+支援 **Apple Silicon Mac、macOS 14 或更新版本**。使用前請準備：
 
-免費 Apple 帳號的簽署通常 7 天到期，同時最多 3 個 App。請在到期前連接 Mac，使用相同 IPA、團隊與選項重新簽署安裝；不要先刪除手機上的 App。Xcode 可能重用尚未過期的描述檔，因此重新安裝不一定立即延長期限，實際日期以完成畫面顯示為準。
+- 開發者提供的未加密 `.ipa`。
+- 包含簽署憑證及私鑰的 `.p12`／`.pfx`，以及檔案密碼（若有）。
+- 符合憑證、App ID、必要權限及目標裝置的 `.mobileprovision`。含 Extension 的 IPA 可能需要額外描述檔。
 
-### 視窗與捲動
+不支援 App Store 加密 IPA、Watch App、App Clip 或含符號連結的 IPA。重新簽署不會延長描述檔的有效期限。
 
-主視窗可調整大小，最小內容尺寸為 940×700。側欄、頂部操作列與底部安裝列固定；只有中央表單可垂直捲動。設定指引固定為 760pt 寬、依內容自適應高度，最高 700pt；內容超出上限時才可垂直捲動。文字大小則遵循 macOS 的系統輔助功能設定。
+## 手動建置 App 與 CLI
 
-0.2.2 依使用者要求只編譯打包，未執行自動測試或實際操作驗證。
+### 建置需求
 
-## 帳密與資料的處理
+- Apple Silicon Mac、macOS 14+。
+- 完整 Xcode 與 Swift 6.2+，並完成 Xcode 首次啟動設定。
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)。
+- 首次準備 Python 與套件時需要網路。
 
-- 登入及雙重認證只在 Apple 的 Xcode 介面完成。
-- 本程式透過 `security find-identity` 與 `security find-certificate` 讀取本機公開憑證資訊，**不讀取 Apple 密碼，也不匯出私鑰**。
-- `codesign` 使用系統鑰匙圈中的私鑰進行本機簽署，macOS 可能顯示鑰匙圈授權提示。
-- `xcodebuild` 使用 Xcode 管理的登入狀態，直接向 Apple 登記裝置、App ID 與取得 provisioning profile。這個步驟需要網路，會在所選 Apple 開發者團隊中建立或更新相關資源。
-- IPA 在隨機的本機暫存資料夾解開與修改，原始檔不變。一般完成、失敗與取消時會清理暫存內容。
-- `devicectl` 將 App 傳送到所選 iPhone。沒有 IPA 上傳網站、遙測或更新服務。
-- 作業紀錄只留在記憶體，可能包含裝置／憑證資訊；只有按「複製紀錄」才會放到剪貼簿。
+### 建置步驟
 
-## 建置
+取得原始碼並進入專案目錄：
 
-需要 macOS 14+、完整 Xcode（包含 Swift 6.2+、iOS SDK、devicectl 及 Python 3）。建議使用支援手機 iOS 版本的 Xcode，並先完成首次啟動設定。
+```sh
+git clone https://github.com/tom19830924/SideLoading.git
+cd SideLoading
+```
 
-### 在 Xcode 開發與執行
+如果已下載專案，直接切換到該目錄即可；例如目前這台 Mac 的專案位置是 `/Users/user/Desktop/SideLoading`。
 
-開啟 `SideLoading.xcodeproj`，選擇 `SideLoading` scheme 與「My Mac」，按 `⌘R`。這個 target 是完整的 macOS App bundle，會包含 Bundle Identifier、`Info.plist` 和 `installer.py`，因此會直接顯示 GUI 並可進行中斷點除錯。
+依序執行：
 
-### 產生自用 App
+```sh
+./setup_runtime.sh
+./build_app.sh
+```
+
+第一個指令準備內附 Python 與固定版本的套件；第二個指令以 Release 設定建置 arm64 App，並同時產生 CLI 發佈包。後續修改程式時可直接執行 `./build_app.sh`；新電腦、刪除執行環境或更新依賴時，再先執行 `./setup_runtime.sh`。
+
+### 產物位置
+
+| 產物 | 專案內位置 | 以目前這台 Mac 為例 |
+| --- | --- | --- |
+| GUI App | `SideLoading.app` | `/Users/user/Desktop/SideLoading/SideLoading.app` |
+| CLI／binary 入口 | `dist/SideLoadingCLI/resign_ipa` | `/Users/user/Desktop/SideLoading/dist/SideLoadingCLI/resign_ipa` |
+
+CLI 的 `resign_ipa` 是啟動檔，會使用同資料夾下的 `Runtime/` 與 `Resources/`。搬移或分享時，請保留整個 `dist/SideLoadingCLI` 資料夾。GUI 則需保留完整 `SideLoading.app`。
+
+若要在 Xcode 中開發或除錯，先執行 `./setup_runtime.sh`，再開啟 `SideLoading.xcodeproj`，選擇 `SideLoading` scheme 與「My Mac」，按 `⌘R`。上述固定產物位置由 `./build_app.sh` 產生。
+
+## 使用 App 與 CLI
+
+### App：重簽並安裝到手機
+
+開啟建置完成的 `SideLoading.app`，或在專案根目錄執行：
+
+```sh
+open ./SideLoading.app
+```
+
+1. 選擇或拖入原始 IPA。
+2. 使用 USB 連接 iPhone／iPad，解鎖並在 Finder 與手機完成「信任此電腦」。開發用簽章需要時，請開啟手機的開發者模式。
+3. 按「重新整理」，選取目標手機。
+4. 選取 P12／PFX 並輸入密碼；沒有密碼則留空。
+5. 選取主 App 描述檔；含 Extension 時可分別指定對應描述檔。
+6. 按「簽署並安裝」。完成後可按「在 Finder 顯示重簽 IPA」，並在手機開啟 App 確認功能。
+
+進階選項可指定 Bundle ID、App Group 對照及略過支援的額外權限。安裝失敗時，已成功重簽的 IPA 會保留，錯誤訊息會顯示檔案位置。
+
+### CLI：重簽並輸出 IPA
 
 在專案根目錄執行：
 
 ```sh
-./build_app.sh
+./dist/SideLoadingCLI/resign_ipa \
+  --ipa "/path/to/App.ipa" \
+  --p12 "/path/to/signing.p12" \
+  --profile "/path/to/App.mobileprovision"
 ```
 
-腳本會以 Release 設定產生 Apple Silicon 專用的 `SideLoading.app`，並確認簽章與 `installer.py` 資源完整後才取代舊版本。這個 App 可複製到其他 Apple Silicon Mac；首次開啟時可能需要在 macOS 安全性設定中手動允許。其他 Mac 仍須安裝完整 Xcode，並由使用者在自己的 Xcode 登入 Apple 帳號及建立 Apple Development 憑證。
+`--ipa` 指定原始 IPA，`--p12` 指定憑證與私鑰，`--profile` 指定主 App 描述檔。執行後依提示輸入 P12 密碼，輸入內容不會顯示；無密碼直接按 Enter。這個範例不需要連接手機。
 
-SwiftUI 介面與 Python 標準函式庫引擎的程式碼均在此專案中。沒有套件下載或第三方函式庫。Mac App 使用本機簽章，並未經 Developer ID 公證；此產物供個人自行建置與使用。
-
-### 測試
+<details>
+<summary>使用目前專案檔案的完整路徑範例</summary>
 
 ```sh
-python3 -m unittest discover -s SideLoadingTests/Python -v
+/Users/user/Desktop/SideLoading/dist/SideLoadingCLI/resign_ipa \
+  --ipa "/Users/user/Desktop/SideLoading/JHenTai_8.0.17+338.ipa" \
+  --p12 "/Users/user/Desktop/SideLoading/憑證.p12" \
+  --profile "/Users/user/Desktop/SideLoading/sparxe_dev.mobileprovision"
 ```
 
-在 Xcode 選擇 `Product → Test` 或按 `⌘U`，執行 `SideLoadingTests`。測試涵蓋 IPA 路徑穿越、符號連結、解壓縮上限、Mach-O 加密檢查、裝置清單格式、簽署到期／裝置／Bundle ID／憑證／權限比對，以及原生 UI 與本機程序的資料通道。
+請將檔案路徑換成你的實際位置。
 
-`0.1.1` 修正自動簽署與指定憑證衝突：向 Xcode 取得描述檔時使用 `Apple Development`，取得後仍驗證描述檔包含使用者選定的憑證，並使用該憑證簽署實際 IPA。新增的回歸測試重播此 Xcode 限制，避免只測試未簽署建置而漏掉錯誤。
+</details>
 
-## 簽署方式
+預設在原始 IPA 同一個資料夾產生 `App-signed.ipa`；同名時使用 `App-signed-2.ipa`、`App-signed-3.ipa` 等名稱。可用 `--output "/path/to/output/App-signed.ipa"` 指定其他輸出位置，資料夾必須已存在。
 
-預設為每個 Apple 團隊與原始 App ID 產生固定的新 Bundle ID，避免與作者的 App ID 衝突。每個 App／擴充功能會建立只供取得描述檔的最小 Xcode 專案，使用 Xcode 自動簽署。此暫存程式不會安裝到手機；實際安裝的是重新簽署的原始 IPA 內容。
+### 常用 CLI 選項
 
-引擎驗證描述檔到期日、目標裝置、App ID、所選憑證與 entitlements，依內到外順序簽署內嵌 framework／dylib／擴充功能，最後交給 `devicectl` 安裝。進階選項可保留原始 Bundle ID，或直接安裝已有適用簽章的 IPA。
+| 選項 | 用途 |
+| --- | --- |
+| `--output PATH`／`-o PATH` | 指定輸出 IPA 路徑。 |
+| `--bundle-id ID` | 指定新的主 App Bundle ID，須符合描述檔；預設依描述檔決定。 |
+| `--extension-profile ORIGINAL_ID=PATH` | 為 Extension 指定描述檔，以原始 Bundle ID 配對，可重複指定。 |
+| `--app-group OLD=NEW` | 指定 App Group 對照，可重複指定。 |
+| `--omit-capability NAME` | 略過 `health-records`、`healthkit-background` 或 `increased-memory`，可重複指定。 |
+| `--password-env NAME` | 從指定環境變數讀取 P12 密碼，供自動化使用。 |
+| `--force` | 允許覆蓋既有輸出；仍禁止覆蓋原始 IPA、憑證與描述檔。 |
 
-### App Extension（0.2.0）
+查看完整用法：
 
-- 列出 IPA 中的 Extension；為每個 Extension 建立真正的 `app-extension` target，保留它的 `NSExtension` 類型並取得獨立描述檔。
-- 主 App 與 Extension 使用同一份共享群組對照：換團隊時為 App Groups 加上新團隊後綴，轉換共享鑰匙圈的原團隊前綴，保留共享群組之間的關係。LiveContainer 的 128 個共享鑰匙圈群組會全部保留。
-- 支援 `ALTAppGroups` 宣告，包含未簽署的 Widget 與內嵌 SideStore framework；同步更新群組權限及這些 Info.plist 宣告。
-- 每個描述檔仍必須授權對應的群組、裝置、Bundle ID 與憑證。某個 Extension 無法取得許可時，會顯示它的名称並停止；不會刪除該 Extension。
-- 若 IPA 要求 HealthKit `health-records`，介面會顯示「略過健康紀錄存取」。**預設不勾選**。明確勾選後只移除該項存取，保留基本 HealthKit、其他權限及全部 Extension；依賴健康紀錄存取的功能將不可用。命令列等效選項為 `--omit-health-records`。
+```sh
+./dist/SideLoadingCLI/resign_ipa --help
+```
 
-App Groups 的名稱若寫死在 App 二進位中，且沒有像 LiveContainer 一樣讀取新團隊或簽章的機制，仍可能無法使用共享資料。本工具更新簽章與已知的 Info.plist 宣告，不會任意改寫二進位中的文字。內建 SideStore 的帳號登入、自動更新與 LiveContainer 的 guest App 簽署設定，亦不會由本工具代為完成或匯出私鑰。
+## 透過 Homebrew 安裝
 
-### 額外權限選擇（0.2.1）
+先安裝 [Homebrew](https://brew.sh/)，再執行：
 
-匯入 IPA 後，「額外權限」會列出它有宣告的臨床健康紀錄、HealthKit 背景傳遞與記憶體增額。每項顯示要求它的 App／Extension 和省略影響。所有選項預設關閉；勾選「略過」才會從該次重簽的所有相關 bundle 移除。更換或重新匯入 IPA 後重設選擇。
+```sh
+brew install tom19830924/tap/resign-ipa
+```
 
-針對本次 LiveContainer 的錯誤，可只勾選「略過臨床健康紀錄」。基本 HealthKit、App Groups、共享鑰匙圈、必要簽署權限及其餘原始權限繼續保留；Extension 不會被刪除。作業紀錄會列出實際略過項目，原始 IPA 不變。此選項不保證所有功能正常，功能驗證由使用者進行。
+套件名稱是 **`resign-ipa`**，終端機指令是 **`resign_ipa`**。安裝後可直接從任何資料夾執行：
 
-命令列支援重複指定 `--omit-capability health-records`、`--omit-capability healthkit-background`、`--omit-capability increased-memory`；原有 `--omit-health-records` 仍可使用。已有簽章直接安裝模式不接受權限省略。
+```sh
+resign_ipa --help
 
-0.2.1 依使用者要求只建置交付，未執行自動測試、Apple 描述檔申請或實機安裝；下方 0.2.0 測試紀錄屬於先前版本。
+resign_ipa \
+  --ipa "/path/to/App.ipa" \
+  --p12 "/path/to/signing.p12" \
+  --profile "/path/to/App.mobileprovision"
+```
 
-## 實際限制
+更新：
 
-- **不能從一般 Safari 網頁下載未簽署 IPA 後直接執行。**這個版本需要 Mac 和 Xcode。
-- 不能解密 App Store 加密的 IPA；需要作者提供可側載版本。
-- 暫不支援 Watch App、App Clip、含符號連結的 IPA、受限制的特殊權限，以及其他不受帳號許可的 capabilities。無法處理時會停止並顯示原因，不會靜默刪除權限。
-- 修改 Bundle ID 可能影響部分 App 的登入、推播或共享資料功能，無法保證所有網路下載的 IPA 都能正常執行。
-- 支援此程式的 macOS 最低為 14；目前安裝引擎以 iOS 17+ 的 `devicectl` 流程為目標。
-- 「安裝完成」代表 iPhone 接受安裝，App 是否成功啟動及內部功能仍需在實機確認。
-- 取消若發生在手機已開始安裝後，請在手機查看實際狀態；不會自動刪除已裝入的 App。
+```sh
+brew update
+brew upgrade tom19830924/tap/resign-ipa
+```
 
-## 本次驗證範圍
+移除：
 
-JHenTai 官方 `8.0.16+334` IPA 已下載並比對 GitHub 發布資訊的 SHA-256：
+```sh
+brew uninstall tom19830924/tap/resign-ipa
+```
 
-`fb2710240451a884d843bf2b3049937f15b7088d44443b0146ce9afb42abe236`
+Homebrew 安裝的是 CLI。GUI App 的下載位置為 [GitHub Releases](https://github.com/tom19830924/SideLoading/releases)。
 
-檢查結果：最低 iOS 13.0、主執行檔未加密、沒有 App Extension。
+## 授權
 
-2026-09-11，使用修正後的 `0.1.1`、使用者選定的本機憑證及 Xcode，已完成簽署並安裝到 iPhone 17 Pro Max（iOS 26.6.1），`devicectl` 回報安裝成功。本次描述檔的到期日為 2027-09-11（以實際所選團隊的許可為準）。後續啟動檢查被手機鎖定狀態阻止，尚未確認 App 成功啟動與內部功能。
+本專案採用 [MIT License](LICENSE)。你可以自由使用、修改、散佈及商業使用；散佈原始碼或軟體副本時，需保留原有著作權與授權聲明。軟體依現狀提供，不附帶擔保。
 
-`0.2.0` 使用工作目錄中的 `LiveContainer+SideStore.ipa`（LiveContainer 3.8.0）驗證：
-
-- 26 個 Python 測試及 2 個原生程序整合測試通過；包含 HealthKit 拒絕診斷、群組共用、未簽署 Widget、128 個鑰匙圈群組及內嵌 framework 的群組宣告。
-- 真正 Xcode 的 Extension target 編譯通過（此編譯檢查停用簽署）。
-- 保留原始權限，使用已選定的真實 Xcode 團隊實測：`LaunchAppExtension.appex` 已取得描述檔並通過群組與憑證檢查；`LiveProcess.appex` 仍被 Apple/Xcode 以免費團隊不支援 HealthKit Access 拒絕。尚未完成整份 IPA 的 Apple 簽署或實機安裝；不可將本機測試通過解讀為安裝完成。
-
-## 官方參考
-
-- [Apple：免費帳號與 Personal Team 限制](https://developer.apple.com/help/account/basics/about-your-developer-account)
-- [Apple：在實機執行 App 與簽署設定](https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices)
-- [JHenTai 官方安裝說明](https://github.com/jiangtian616/JHenTai)
-- [本次下載的官方發佈版本](https://github.com/jiangtian616/JHenTai/releases/tag/v8.0.16%2B334)
-- [Apple：iOS 帳號能力表](https://developer.apple.com/help/account/reference/supported-capabilities-ios)
-- [LiveContainer：共享群組與團隊識別碼](https://github.com/LiveContainer/LiveContainer/blob/main/LiveContainer/LCSharedUtils.m)
-- [LiveContainer + SideStore 官方設定說明](https://livecontainer.github.io/docs/installation/lc_sidestore)
+內附的 Python 與第三方套件依各自的授權條款發佈；相關授權檔隨執行環境保留。主要上游專案為 [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) 與 [python-build-standalone](https://github.com/astral-sh/python-build-standalone)。

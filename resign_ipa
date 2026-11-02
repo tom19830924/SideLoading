@@ -1,0 +1,11 @@
+#!/bin/zsh
+set -euo pipefail
+root="${0:A:h}"
+if [[ -x "$root/Runtime/bin/python3" ]]; then
+    exec "$root/Runtime/bin/python3" -I -B "$root/Resources/resign_cli.py" "$@"
+elif [[ -x "$root/.build/Runtime/bin/python3" ]]; then
+    exec "$root/.build/Runtime/bin/python3" -I -B "$root/SideLoading/Resources/resign_cli.py" "$@"
+else
+    print -u2 "找不到內附執行環境。開發者請先執行 setup_runtime.sh；使用者請取得完整 CLI 發佈包。"
+    exit 1
+fi

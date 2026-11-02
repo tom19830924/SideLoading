@@ -1,10 +1,8 @@
-"""Local IPA inspection, Apple provisioning, signing and device installation.
+"""Shared local IPA validation and code-signing primitives.
 
-Only the Python standard library and tools provided by macOS / Xcode are used.
+This module uses the Python standard library and macOS signing tools.
 The process emits newline-delimited JSON; no Apple account passwords are handled.
 """
-import argparse
-import base64
 import datetime
 import hashlib
 import json
@@ -17,7 +15,6 @@ import signal
 import stat
 import struct
 import subprocess
-import sys
 import tempfile
 import zipfile
 
@@ -73,11 +70,11 @@ def progress(message, stage):
     emit("progress", message=message, stage=stage)
 
 
-def run(args, timeout=60, check=True, input_data=None):
+def run(args, timeout=60, check=True, input_data=None, pass_fds=()):
     """Never use a shell; terminate the entire subprocess group on cancellation."""
     process = subprocess.Popen(
         [str(a) for a in args], stdin=subprocess.PIPE if input_data else subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, pass_fds=pass_fds,
     )
     try:
         output, error = process.communicate(input=input_data, timeout=timeout)
@@ -249,82 +246,6 @@ def inspect(source):
                     encrypted=encrypted, fileName=Path(source).name)
 
 
-def parse_devices(payload):
-    devices = []
-    for device in payload.get("result", {}).get("devices", []):
-        props = device.get("properties", {})
-        hardware = props.get("hardware", device.get("hardwareProperties", {}))
-        state = props.get("state", device.get("deviceProperties", {}))
-        connection = props.get("connection", device.get("connectionProperties", {}))
-        software = props.get("software", device.get("deviceProperties", {}))
-        if hardware.get("deviceType") not in ("iPhone", "iPad") or hardware.get("reality") != "physical":
-            continue
-        version = software.get("osVersionNumber", "未知")
-        if isinstance(version, dict):
-            version = version.get("stringValue", "未知")
-        status = connection.get("state", connection.get("tunnelState", "unknown"))
-        developer = state.get("developerModeStatus", "unknown")
-        if isinstance(developer, dict):
-            developer = "enabled" if "enabled" in developer else "disabled" if "disabled" in developer else "unknown"
-        devices.append(dict(id=hardware.get("udid") or device["identifier"], name=state.get("name", "iPhone"),
-                            model=hardware.get("marketingName", "iPhone"), osVersion=version,
-                            available=status in ("connected", "connecting", "disconnected") and connection.get("pairingState") == "paired",
-                            connected=status == "connected", developerMode=developer,
-                            transport=connection.get("transportType", "unknown")))
-    return sorted(devices, key=lambda d: (not d["connected"], not d["available"], d["name"]))
-
-
-def list_devices():
-    with tempfile.TemporaryDirectory(prefix="sideload-devices-") as work:
-        output = Path(work) / "devices.json"
-        run(["/usr/bin/xcrun", "devicectl", "list", "devices", "--json-output", output, "--timeout", "20"], timeout=30)
-        payload = json.loads(output.read_text())
-        if payload.get("info", {}).get("outcome") != "success":
-            raise InstallError("Xcode 無法取得裝置清單。請確認手機已解鎖並信任此電腦。")
-        return parse_devices(payload)
-
-
-def identities():
-    output, _, _ = run(["/usr/bin/security", "find-identity", "-v", "-p", "codesigning"])
-    found = re.findall(r'([A-Fa-f0-9]{40})\s+"([^"]+)"', output.decode(errors="replace"))
-    if not found:
-        return []
-    # Public certificates only; no private key or credential is exported.
-    certs, _, _ = run(["/usr/bin/security", "find-certificate", "-a", "-p"])
-    teams = {}
-    for pem in re.findall(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", certs, re.S):
-        der = base64.b64decode(b"".join(pem.splitlines()[1:-1]))
-        digest = hashlib.sha1(der).hexdigest().upper()
-        if digest not in {fingerprint.upper() for fingerprint, _ in found}:
-            continue
-        subject, _, _ = run(["/usr/bin/openssl", "x509", "-noout", "-subject", "-nameopt", "RFC2253"], input_data=pem)
-        match = re.search(r"(?:^|,)OU=([A-Z0-9]{10})(?:,|$)", subject.decode().strip())
-        if match:
-            teams[digest] = match[1]
-    return [dict(id=fingerprint.upper(), name=name, teamID=teams[fingerprint.upper()])
-            for fingerprint, name in found if fingerprint.upper() in teams
-            and name.startswith(("Apple Development:", "iPhone Developer:"))]
-
-
-def environment():
-    warnings, devices, certificates = [], [], []
-    xcode = False
-    try:
-        path, _, _ = run(["/usr/bin/xcode-select", "-p"])
-        xcode = (Path(path.decode().strip()) / "usr/bin/xcodebuild").is_file()
-        if not xcode:
-            warnings.append("請安裝並開啟完整 Xcode，Command Line Tools 不足以安裝 IPA。")
-        else:
-            devices = list_devices()
-    except (InstallError, subprocess.TimeoutExpired) as error:
-        warnings.append(str(error))
-    try:
-        certificates = identities()
-    except InstallError as error:
-        warnings.append(str(error))
-    return dict(xcodeReady=xcode, devices=devices, identities=certificates, warnings=warnings)
-
-
 def entitlements(app):
     output, error, status = run(["/usr/bin/codesign", "-d", "--entitlements", ":-", app], check=False)
     if status:
@@ -373,59 +294,6 @@ def rewritten_entitlements(original, old_id, new_id, team, group_map=None, keych
     return result
 
 
-def provision_project(folder, bundle_id, team, desired, extension=None):
-    folder.mkdir(parents=True, exist_ok=True)
-    project = folder / "Signing.xcodeproj"
-    project.mkdir()
-    (folder / "main.m").write_text(
-        "#import <Foundation/Foundation.h>\n@interface SigningExtension : NSObject @end\n@implementation SigningExtension @end\n"
-        if extension is not None else "int main(int argc, char **argv) { return 0; }\n")
-    write_plist(folder / "Signing.entitlements", desired)
-    # plist-form Xcode projects avoid interpolation into executable build scripts.
-    settings = dict(SDKROOT="iphoneos", IPHONEOS_DEPLOYMENT_TARGET="17.0", PRODUCT_NAME="Signing",
-                    PRODUCT_BUNDLE_IDENTIFIER=bundle_id, DEVELOPMENT_TEAM=team, CODE_SIGN_STYLE="Automatic",
-                    CODE_SIGN_IDENTITY="Apple Development", CODE_SIGN_ENTITLEMENTS="Signing.entitlements",
-                    GENERATE_INFOPLIST_FILE="YES", TARGETED_DEVICE_FAMILY="1,2", ENABLE_BITCODE="NO",
-                    ALWAYS_SEARCH_USER_PATHS="NO", INFOPLIST_KEY_UILaunchScreen_Generation="YES",
-                    INFOPLIST_KEY_UISupportedInterfaceOrientations="UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight")
-    settings["SUPPORTED_PLATFORMS"] = "iphoneos"
-    if extension is not None:
-        settings.update(GENERATE_INFOPLIST_FILE="NO", INFOPLIST_FILE="Signing-Info.plist",
-                        APPLICATION_EXTENSION_API_ONLY="YES", SKIP_INSTALL="YES",
-                        OTHER_LDFLAGS=["-framework", "UIKit", "-framework", "Foundation"])
-        write_plist(folder / "Signing-Info.plist", dict(
-            CFBundleIdentifier="$(PRODUCT_BUNDLE_IDENTIFIER)", CFBundleExecutable="$(EXECUTABLE_NAME)",
-            CFBundleName="Signing", CFBundlePackageType="XPC!", CFBundleVersion="1",
-            CFBundleShortVersionString="1.0", NSExtension=extension))
-    capabilities = {}
-    for entitlement, capability in [(APP_GROUPS, "com.apple.ApplicationGroups.iOS"),
-                                    ("keychain-access-groups", "com.apple.Keychain"),
-                                    ("com.apple.developer.healthkit", "com.apple.HealthKit")]:
-        if desired.get(entitlement):
-            capabilities[capability] = {"enabled": 1}
-    objects = {
-        "01": dict(isa="PBXProject", buildConfigurationList="02", compatibilityVersion="Xcode 14.0",
-                   mainGroup="03", productRefGroup="04", projectDirPath="", projectRoot="", targets=["05"],
-                   attributes=dict(LastUpgradeCheck="1600", TargetAttributes={"05": {"ProvisioningStyle": "Automatic", "SystemCapabilities": capabilities}})),
-        "02": dict(isa="XCConfigurationList", buildConfigurations=["06"], defaultConfigurationIsVisible="0", defaultConfigurationName="Debug"),
-        "03": dict(isa="PBXGroup", children=["07", "04"], sourceTree="<group>"),
-        "04": dict(isa="PBXGroup", children=["08"], name="Products", sourceTree="<group>"),
-        "05": dict(isa="PBXNativeTarget", buildConfigurationList="09", buildPhases=["10"], buildRules=[], dependencies=[],
-                   name="Signing", productName="Signing", productReference="08",
-                   productType="com.apple.product-type.app-extension" if extension is not None else "com.apple.product-type.application"),
-        "06": dict(isa="XCBuildConfiguration", name="Debug", buildSettings={}),
-        "07": dict(isa="PBXFileReference", lastKnownFileType="sourcecode.c.objc", path="main.m", sourceTree="<group>"),
-        "08": dict(isa="PBXFileReference", explicitFileType="wrapper.app-extension" if extension is not None else "wrapper.application",
-                   path="Signing.appex" if extension is not None else "Signing.app", sourceTree="BUILT_PRODUCTS_DIR"),
-        "09": dict(isa="XCConfigurationList", buildConfigurations=["11"], defaultConfigurationIsVisible="0", defaultConfigurationName="Debug"),
-        "10": dict(isa="PBXSourcesBuildPhase", buildActionMask="2147483647", files=["12"], runOnlyForDeploymentPostprocessing="0"),
-        "11": dict(isa="XCBuildConfiguration", name="Debug", buildSettings=settings),
-        "12": dict(isa="PBXBuildFile", fileRef="07"),
-    }
-    write_plist(project / "project.pbxproj", dict(archiveVersion="1", classes={}, objectVersion="56", objects=objects, rootObject="01"))
-    return project
-
-
 def profile_data(path):
     output, _, _ = run(["/usr/bin/security", "cms", "-D", "-i", path])
     return plistlib.loads(output)
@@ -445,8 +313,8 @@ def validate_profile(profile, bundle_id, device_id, desired, certificate=None):
     expiry = profile.get("ExpirationDate")
     if not isinstance(expiry, datetime.datetime) or expiry.replace(tzinfo=datetime.timezone.utc) <= datetime.datetime.now(datetime.timezone.utc):
         raise InstallError("簽署描述檔已過期，請重新簽署。")
-    if not profile.get("ProvisionsAllDevices") and device_id not in profile.get("ProvisionedDevices", []):
-        raise InstallError("簽署描述檔未包含所選 iPhone，請使用自動簽署。")
+    if device_id is not None and not profile.get("ProvisionsAllDevices") and device_id not in profile.get("ProvisionedDevices", []):
+        raise InstallError("簽署描述檔未包含所選手機，請提供允許此裝置的描述檔。")
     grants = profile.get("Entitlements", {})
     prefixes = profile.get("ApplicationIdentifierPrefix", [])
     if not prefixes or not permits(grants.get("application-identifier"), f"{prefixes[0]}.{bundle_id}"):
@@ -458,7 +326,7 @@ def validate_profile(profile, bundle_id, device_id, desired, certificate=None):
         elif key not in grants or not permits(grants[key], value):
             raise InstallError(f"你的 Apple 帳號／描述檔不支援此 App 需要的權限：{key}。")
     if certificate and certificate.upper() not in {hashlib.sha1(c).hexdigest().upper() for c in profile.get("DeveloperCertificates", [])}:
-        raise InstallError("描述檔不包含所選簽署憑證，請在 Xcode 更新憑證後重試。")
+        raise InstallError("描述檔不包含所選簽署憑證，請提供對應憑證或更新描述檔。")
     return expiry
 
 
@@ -468,71 +336,6 @@ def version_tuple(value):
         return parts + (0,) * max(0, 4 - len(parts))
     except (ValueError, AttributeError):
         return ()
-
-
-def signing_plan(app, team, keep_identifier=False, omit_health_records=False, omitted_capabilities=None):
-    omissions = selected_omissions(omit_health_records, omitted_capabilities)
-    root_id = bundle_info(app)["CFBundleIdentifier"]
-    # Stable, per-account identifier avoids collisions with the publisher's ID.
-    digest = hashlib.sha256(root_id.encode()).hexdigest()[:20]
-    new_root = root_id if keep_identifier else f"local.sideload.t{team.lower()}.a{digest}"
-    records, identifiers = [], {}
-    for bundle in app_bundles(app):
-        info = bundle_info(bundle)
-        old_id = info["CFBundleIdentifier"]
-        if old_id in identifiers:
-            raise InstallError("IPA 的 App／Extension 使用了重複的 Bundle ID。")
-        if bundle != app and not old_id.startswith(root_id + "."):
-            raise InstallError("擴充功能的 Bundle ID 不屬於此 App。")
-        if bundle != app and not info.get("NSExtension", {}).get("NSExtensionPointIdentifier"):
-            raise InstallError(f"擴充功能 {bundle.stem} 缺少 NSExtensionPointIdentifier。")
-        new_id = new_root + old_id[len(root_id):]
-        original = dict(entitlements(bundle))
-        # SideStore's unsigned widget declares its required groups in Info.plist.
-        groups = list(original.get(APP_GROUPS, []))
-        for group in info.get("ALTAppGroups", []):
-            if group not in groups:
-                groups.append(group)
-        if groups:
-            original[APP_GROUPS] = groups
-        identifiers[old_id] = new_id
-        records.append((bundle, info, new_id, original))
-    # One mapping for the entire archive keeps shared containers and keychains
-    # shared by the host and every extension, including unsigned extensions.
-    group_map, keychain_map = {}, {}
-    old_teams = {ent.get("com.apple.developer.team-identifier") for _, _, _, ent in records}
-    old_teams.discard(None)
-    for _, _, _, original in records:
-        app_id = original.get("application-identifier", "")
-        if app_id:
-            old_teams.add(app_id.split(".")[0])
-    for _, _, _, original in records:
-        for group in original.get(APP_GROUPS, []):
-            if not isinstance(group, str) or not re.fullmatch(r"group\.[A-Za-z0-9.-]+", group):
-                raise InstallError("IPA 的 App Group 識別碼無效。")
-            if team in old_teams or group.endswith("." + team):
-                group_map[group] = group
-            else:
-                base = group
-                for old_team in old_teams:
-                    if base.endswith("." + old_team):
-                        base = base[:-(len(old_team) + 1)]
-                        break
-                group_map[group] = base + "." + team
-        for group in original.get("keychain-access-groups", []):
-            if not isinstance(group, str):
-                raise InstallError("IPA 的共享鑰匙圈識別碼無效。")
-            prefix, separator, suffix = group.partition(".")
-            if separator and re.fullmatch(r"[A-Z0-9]{10}", prefix):
-                keychain_map[group] = team + "." + identifiers.get(suffix, suffix)
-            else:
-                keychain_map[group] = group
-    result = []
-    for bundle, info, new_id, original in records:
-        desired = rewritten_entitlements(original, info["CFBundleIdentifier"], new_id, team,
-                                         group_map, keychain_map, omitted_capabilities=omissions)
-        result.append((bundle, info, new_id, desired))
-    return result
 
 
 def rewrite_shared_metadata(app, plan):
@@ -557,51 +360,8 @@ def rewrite_shared_metadata(app, plan):
             info["ALTAppGroups"] = [mapping[group] for group in info["ALTAppGroups"]]
 
 
-def resign(app, work, device_id, team, certificate, keep_identifier, omit_health_records=False,
-           omitted_capabilities=None):
-    omissions = selected_omissions(omit_health_records, omitted_capabilities)
-    plan = signing_plan(app, team, keep_identifier, omitted_capabilities=omissions)
-    for identifier in sorted(omissions):
-        option = OPTIONAL_CAPABILITIES[identifier]
-        affected = [bundle.name for bundle, _, _, _ in plan if requested_capability(entitlements(bundle), option)]
-        if affected:
-            progress(f"略過「{option['title']}」：{'、'.join(affected)}。{option['impact']}", "sign")
-    expiries, signing = [], {}
-    # Provision every bundle before modifying the extracted app.
-    for index, (bundle, info, new_id, desired) in enumerate(plan):
-        progress(f"向 Apple 取得簽署許可（{index + 1}/{len(plan)}）：{bundle.name}", "provision")
-        folder = work / f"provision-{index}"
-        extension = info.get("NSExtension") if bundle != app else None
-        project = provision_project(folder, new_id, team, desired, extension)
-        # Automatic provisioning requires the generic "Apple Development"
-        # identity set in the project. A certificate fingerprint here conflicts
-        # with CODE_SIGN_STYLE=Automatic. Enforce the user's exact certificate
-        # against the resulting profile and use it for local codesign below.
-        try:
-            run(["/usr/bin/xcrun", "xcodebuild", "-quiet", "-project", project, "-scheme", "Signing",
-                 "-configuration", "Debug", "-destination", f"id={device_id}", "-derivedDataPath", folder / "build",
-                 "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration", "build"], timeout=360)
-        except InstallError as error:
-            hint = ""
-            if "HealthKit Access" in str(error) and "Personal development teams" in str(error):
-                hint = "\n免費帳號無法取得健康紀錄存取權限。若可接受該功能停用，請在「額外權限」勾選「略過臨床健康紀錄」後重試。"
-            raise InstallError(f"無法取得 {bundle.name} 的描述檔（{new_id}）。{hint}\n{error}") from error
-        generated = folder / "build/Build/Products/Debug-iphoneos" / ("Signing.appex" if extension is not None else "Signing.app")
-        profile_path = generated / "embedded.mobileprovision"
-        if not profile_path.is_file():
-            raise InstallError("Xcode 未產生簽署描述檔。請先在 Xcode 登入 Apple 帳號。")
-        profile = profile_data(profile_path)
-        signed_entitlements = entitlements(generated)
-        for key, value in desired.items():
-            if signed_entitlements.get(key) != value:
-                raise InstallError(f"Xcode 改變了 App 必需的權限：{key}，已停止安裝。")
-        for identifier in omissions:
-            option = OPTIONAL_CAPABILITIES[identifier]
-            if requested_capability(signed_entitlements, option):
-                raise InstallError(f"Xcode 仍簽入已選擇略過的權限：{option['title']}，已停止安裝。")
-        expiries.append(validate_profile(profile, new_id, device_id, signed_entitlements, certificate))
-        signing[bundle] = (profile_path, signed_entitlements)
-    progress("正在重新簽署 App 與內嵌程式庫…", "sign")
+def sign_bundles(app, work, certificate, plan, signing, keychain=None):
+    """Apply a validated plan and sign nested code before its containing bundle."""
     rewrite_shared_metadata(app, plan)
     for bundle, info, new_id, _ in plan:
         info["CFBundleIdentifier"] = new_id
@@ -620,104 +380,15 @@ def resign(app, work, device_id, team, certificate, keep_identifier, omit_health
     nested.extend(bundle for bundle, _, _, _ in plan)
     for target in sorted(set(nested), key=lambda p: len(p.parts), reverse=True):
         command = ["/usr/bin/codesign", "--force", "--sign", certificate, "--timestamp=none", "--generate-entitlement-der"]
+        if keychain is not None:
+            command += ["--keychain", keychain]
         if target in signing:
             entitlement_path = work / (hashlib.sha256(str(target).encode()).hexdigest() + ".plist")
             write_plist(entitlement_path, signing[target][1])
             command += ["--entitlements", entitlement_path]
         run(command + [target], timeout=120)
     run(["/usr/bin/codesign", "--verify", "--deep", "--strict", app], timeout=120)
-    return min(expiries), plan[-1][2]
-
-
-def install(args):
-    omissions = selected_omissions(getattr(args, "omit_health_records", False), getattr(args, "omit_capability", None))
-    if args.mode == "existing" and omissions:
-        raise InstallError("直接使用現有簽章時無法略過權限，請改用重新簽署。")
-    if args.mode == "automatic" and (not re.fullmatch(r"[A-Z0-9]{10}", args.team or "")
-                                      or not re.fullmatch(r"[A-Fa-f0-9]{40}", args.identity or "")):
-        raise InstallError("請先在 Xcode 建立 Apple Development 憑證，再重新整理。")
-    if not re.fullmatch(r"[A-Fa-f0-9-]{16,64}", args.device):
-        raise InstallError("裝置識別碼無效。")
-    progress("確認 iPhone 與 IPA…", "inspect")
-    devices = list_devices()
-    device = next((d for d in devices if d["id"] == args.device), None)
-    if not device or not device["available"]:
-        raise InstallError("找不到所選 iPhone。請連接傳輸線、解鎖手機，並點選「信任」。")
-    if device["developerMode"] == "disabled":
-        raise InstallError("請在 iPhone 的「設定 → 隱私權與安全性 → 開發者模式」開啟並重新啟動。")
-    with tempfile.TemporaryDirectory(prefix="sideload-install-") as directory:
-        work = Path(directory)
-        app = extract_ipa(args.ipa, work)
-        info = bundle_info(app)
-        for bundle in app_bundles(app):
-            current = bundle_info(bundle)
-            if macho_encrypted(bundle / current["CFBundleExecutable"]):
-                raise InstallError("此 IPA 的執行檔受到 App Store 加密保護，無法重新簽署安裝。請向開發者取得可側載版本。")
-            if version_tuple(current.get("MinimumOSVersion", "0")) > version_tuple(device["osVersion"]):
-                raise InstallError(f"這個 App 需要 iOS {current['MinimumOSVersion']} 或更新版本。")
-        if args.mode == "automatic":
-            expires, bundle_id = resign(app, work, args.device, args.team, args.identity, args.keep_identifier,
-                                       omitted_capabilities=omissions)
-        else:
-            progress("驗證現有簽署與裝置許可…", "sign")
-            run(["/usr/bin/codesign", "--verify", "--deep", "--strict", app], timeout=120)
-            expiries = []
-            for bundle in app_bundles(app):
-                profile_path = bundle / "embedded.mobileprovision"
-                if not profile_path.is_file():
-                    raise InstallError("IPA 沒有描述檔，請改用「免費帳號自動簽署」。")
-                expiries.append(validate_profile(profile_data(profile_path), bundle_info(bundle)["CFBundleIdentifier"], args.device, entitlements(bundle)))
-            expires, bundle_id = min(expiries), info["CFBundleIdentifier"]
-        progress("傳送到 iPhone 並安裝；請保持連線…", "install")
-        result_file = work / "installed.json"
-        run(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", args.device, app,
-             "--json-output", result_file, "--timeout", "180"], timeout=195)
-        payload = json.loads(result_file.read_text())
-        if payload.get("info", {}).get("outcome") != "success":
-            raise InstallError("iPhone 未回報安裝成功。" + json.dumps(payload.get("error", {}), ensure_ascii=False))
-        return dict(name=info.get("CFBundleDisplayName") or info.get("CFBundleName") or app.stem,
-                    bundleID=bundle_id, deviceName=device["name"], expires=expires.replace(tzinfo=datetime.timezone.utc).isoformat())
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("environment")
-    inspection = commands.add_parser("inspect")
-    inspection.add_argument("ipa")
-    installation = commands.add_parser("install")
-    installation.add_argument("ipa")
-    installation.add_argument("--device", required=True)
-    installation.add_argument("--mode", choices=("automatic", "existing"), default="automatic")
-    installation.add_argument("--team")
-    installation.add_argument("--identity")
-    installation.add_argument("--keep-identifier", action="store_true")
-    installation.add_argument("--omit-health-records", action="store_true",
-                              help="Explicitly omit HealthKit health-records access; preserve other capabilities")
-    installation.add_argument("--omit-capability", action="append", choices=list(OPTIONAL_CAPABILITIES), default=[],
-                              help="Omit a specified additional capability; repeat to select multiple")
-    args = parser.parse_args()
-    try:
-        if args.command == "environment":
-            result = environment()
-        elif args.command == "inspect":
-            result = inspect(args.ipa)
-        else:
-            result = install(args)
-        emit("result", data=result)
-    except KeyboardInterrupt:
-        emit("error", message="作業已取消。若已開始傳送，請查看 iPhone 確認安裝狀態。")
-        return 130
-    except Exception as error:
-        emit("error", message=str(error))
-        return 1
-    return 0
 
 
 def interrupt(*_):
     raise KeyboardInterrupt()
-
-
-if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, interrupt)
-    sys.exit(main())

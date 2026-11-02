@@ -11,7 +11,7 @@ struct InstallFooter: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.isBusy || model.stage == "done" ? model.status : model.readiness)
                         .font(.callout)
-                    Text("安裝時，Xcode 會直接向 Apple 取得簽署許可。")
+                    Text("保留原始 IPA，重簽新副本後安裝到所選手機。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
