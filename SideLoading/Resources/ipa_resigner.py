@@ -1,9 +1,11 @@
 """Offline IPA re-signing with a supplied PKCS#12 identity and profiles."""
+import ctypes
 import hashlib
 import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 import zipfile
 
@@ -181,6 +183,24 @@ def _select_identity(keychain, profiles):
     return candidates.pop()
 
 
+def _publish_without_overwriting(temporary, target):
+    try:
+        os.link(temporary, target)
+        return
+    except PermissionError:
+        if sys.platform != "darwin":
+            raise
+
+    # macOS can allow renaming a file where creating a hard link is denied.
+    rename = ctypes.CDLL(None, use_errno=True).renamex_np
+    rename.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+    rename.restype = ctypes.c_int
+    rename_excl = 0x00000004  # RENAME_EXCL from Darwin's sys/stdio.h.
+    if rename(os.fsencode(temporary), os.fsencode(target), rename_excl) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), temporary, None, target)
+
+
 def _pack(archive_root, output, force):
     """Keep signing inputs outside the archive and publish only a complete ZIP."""
     target = Path(output).absolute()
@@ -196,7 +216,7 @@ def _pack(archive_root, output, force):
             os.replace(temporary, target)
         else:
             try:
-                os.link(temporary, target)
+                _publish_without_overwriting(temporary, target)
             except FileExistsError as error:
                 raise installer.InstallError("輸出檔案已存在，未覆蓋；請改用其他檔名或 --force。") from error
     finally:

@@ -1,6 +1,7 @@
 """Offline signing contracts; Apple services and real credentials aren't used."""
 from contextlib import contextmanager
 import datetime
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -233,6 +234,26 @@ class ResignerTests(unittest.TestCase):
         def competing_output(source, destination):
             self.output.write_bytes(b"another process")
             original_link(source, destination)
+        with patch.object(resigner.os, "link", side_effect=competing_output):
+            with self.assertRaisesRegex(engine.InstallError, "未覆蓋"):
+                self.run_resign()
+        self.assertEqual(self.output.read_bytes(), b"another process")
+        self.assertEqual(list(self.folder.glob(".sideload-resigned-*")), [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "Requires macOS exclusive rename")
+    def test_output_is_published_when_hard_link_is_denied(self):
+        with patch.object(resigner.os, "link", side_effect=PermissionError(errno.EPERM, "link denied")):
+            self.run_resign()
+        with zipfile.ZipFile(self.output) as archive:
+            self.assertEqual(archive.read("Payload/Host.app/resource.txt"), b"keep me")
+        self.assertEqual(list(self.folder.glob(".sideload-resigned-*")), [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "Requires macOS exclusive rename")
+    def test_rename_after_hard_link_denial_does_not_overwrite_competing_output(self):
+        def competing_output(source, destination):
+            Path(destination).write_bytes(b"another process")
+            raise PermissionError(errno.EPERM, "link denied")
+
         with patch.object(resigner.os, "link", side_effect=competing_output):
             with self.assertRaisesRegex(engine.InstallError, "未覆蓋"):
                 self.run_resign()
