@@ -106,6 +106,7 @@ open ./SideLoading.app
 
 | 選項 | 用途 |
 | --- | --- |
+| `-v`／`--version` | 顯示 `resign_ipa` 的版號。 |
 | `--output PATH`／`-o PATH` | 指定輸出 IPA 路徑。 |
 | `--bundle-id ID` | 指定新的主 App Bundle ID，須符合描述檔；預設依描述檔決定。 |
 | `--extension-profile ORIGINAL_ID=PATH` | 為 Extension 指定描述檔，以原始 Bundle ID 配對，可重複指定。 |
@@ -131,6 +132,7 @@ brew install tom19830924/tap/resign-ipa
 套件名稱是 **`resign-ipa`**，終端機指令是 **`resign_ipa`**。安裝後可直接從任何資料夾執行：
 
 ```sh
+resign_ipa --version
 resign_ipa --help
 
 resign_ipa \

@@ -30,6 +30,8 @@ def unique_mappings(values):
 
 def parser():
     root = argparse.ArgumentParser(prog="resign_ipa")
+    info = installer.read_plist(Path(__file__).resolve().parents[1] / "Info.plist")
+    version = f"{root.prog} {info['CFBundleShortVersionString']}"
     root.add_argument("--json", action="store_true", help="供 GUI 使用的逐行 JSON 事件")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("environment", help="讀取 USB 手機清單")
@@ -37,6 +39,7 @@ def parser():
     inspect.add_argument("ipa")
     for command in ("resign", "install"):
         child = commands.add_parser(command, description="使用提供的 IPA、P12 與描述檔重簽；原始檔保持不變。")
+        child.add_argument("-v", "--version", action="version", version=version, help="顯示工具版本")
         child.add_argument("--ipa", required=True)
         child.add_argument("--certificate", "--p12", required=True, help="包含憑證與私鑰的 .p12／.pfx")
         child.add_argument("--profile", required=True, help="主 App 的描述檔")

@@ -62,6 +62,7 @@ mkdir -p dist/SideLoadingCLI/Resources
 for resource in installer.py resign_cli.py ipa_resigner.py signing_keychain.py device_backend.py; do
     /bin/cp "$output_app/Contents/Resources/$resource" "dist/SideLoadingCLI/Resources/$resource"
 done
+/bin/cp "$output_app/Contents/Info.plist" dist/SideLoadingCLI/Info.plist
 /bin/cp resign_ipa dist/SideLoadingCLI/resign_ipa
 /bin/cp requirements-runtime.lock dist/SideLoadingCLI/requirements-runtime.lock
 /bin/cp README.md dist/SideLoadingCLI/README.md

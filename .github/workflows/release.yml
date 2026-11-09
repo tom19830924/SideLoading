@@ -45,11 +45,14 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: .build/Runtime/bin/python3 -I -B Tools/prepare_release.py "$RELEASE_TAG"
       - name: Check relocated CLI archive
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           mkdir -p "$RUNNER_TEMP/CLI smoke test"
           tar -xzf dist/release/resign-ipa-*-macos-arm64.tar.gz -C "$RUNNER_TEMP/CLI smoke test"
-          DEVELOPER_DIR=/nonexistent PATH=/usr/bin:/bin \
-            "$RUNNER_TEMP/CLI smoke test/SideLoadingCLI/resign_ipa" --help
+          cli="$RUNNER_TEMP/CLI smoke test/SideLoadingCLI/resign_ipa"
+          DEVELOPER_DIR=/nonexistent PATH=/usr/bin:/bin "$cli" --help
+          test "$(DEVELOPER_DIR=/nonexistent PATH=/usr/bin:/bin "$cli" -v)" = "resign_ipa ${RELEASE_TAG#v}"
           ruby -c dist/release/resign-ipa.rb
       - name: Preserve Homebrew formula for tap job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

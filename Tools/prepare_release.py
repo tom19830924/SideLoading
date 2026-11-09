@@ -8,7 +8,7 @@ import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI_FILES = ("resign_ipa", "Runtime", "Resources", "README.md", "LICENSE", "requirements-runtime.lock")
+CLI_FILES = ("resign_ipa", "Runtime", "Resources", "Info.plist", "README.md", "LICENSE", "requirements-runtime.lock")
 
 
 def release_version(tag, root=ROOT):
@@ -40,12 +40,13 @@ class ResignIpa < Formula
   skip_clean "libexec/Runtime"
 
   def install
-    libexec.install "resign_ipa", "Runtime", "Resources", "README.md", "LICENSE", "requirements-runtime.lock"
+    libexec.install "resign_ipa", "Runtime", "Resources", "Info.plist", "README.md", "LICENSE", "requirements-runtime.lock"
     bin.install_symlink libexec/"resign_ipa"
   end
 
   test do
     assert_match "--ipa", shell_output("#{{bin}}/resign_ipa --help")
+    assert_equal "resign_ipa {version}", shell_output("#{{bin}}/resign_ipa --version").strip
     assert_match '"type": "result"', shell_output("#{{bin}}/resign_ipa --json environment")
   end
 end
